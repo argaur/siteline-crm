@@ -216,3 +216,13 @@ DASHBOARD_TOKEN_SECRET  # HMAC signing key for dashboard tokens
   needs `BOT_NAME=SitelineCRMbot` and the new bot's `TELEGRAM_BOT_TOKEN`** — until
   both land plus a redeploy, the bot hands out dead `founder-crm` dashboard links.
 - **Last updated:** 2026-07-18
+
+## Model notes
+**This section expires. Review it at every model launch and every Claude Code version bump.**
+Current as of 2026-08-05: Opus 5 / Sonnet 5 / Fable 5, Claude Code 2.1.222. Checked by
+`Claude Optimisation/scripts/claude-md-eval.sh`, which found nothing stale in this file.
+- Delegation is not automatic. Claude Code 2.1.219 and later suppress subagents on Opus 5 unless
+  the user asks for one, so name the agent when you want it.
+- Do not add verification, anti-laziness or hedging instructions. These models self-verify, are
+  direct by default, and obey a hedge literally by reporting less.
+- Reasoning: `Claude Optimisation/docs/setup-versions/artifacts/2026-08-05-model5-migration/`.
