@@ -2,17 +2,19 @@
 
 This file provides guidance to Claude Code when working with code in this repository.
 
-**Framework state:** Blueprint/`/rubric` explicitly skipped for this project — timeline
-(ship by 2026-07-17) doesn't allow for it. Vertical chosen: **Stylework B2B Sales**.
-Working directly off `IMPLEMENTATION_PLAN.md` instead. See
-`memory/decision-b2b-vertical-and-db-migration.md` for the reasoning this plan is
-built on.
+## Framework state
+- **Framework:** Blueprint. There is only one, so this is not a choice.
+- **Rubric score:** none. `/rubric` was skipped in July because the ship-by date of 2026-07-17
+  did not allow for it. That date has passed, so the reason no longer holds. **Open: run
+  `/rubric` and record the score and date here.** The contract has no permanent skip.
+- Vertical chosen: **Stylework B2B Sales**. Working off `IMPLEMENTATION_PLAN.md`. See
+  `memory/decision-b2b-vertical-and-db-migration.md` for the reasoning this plan is built on.
 
-**Agent policy for this project:** `Agent` tool dispatches split by purpose —
-`model: "fable"` (Fable 5) for planning/strategy/research/design-brief agents,
-`model: "opus"` (latest Opus) for execution/code-writing agents. Both are
-project-specific overrides, not the general default. (Updated 2026-07-16,
-mid-build — see `memory/feedback-fable5-only.md`.)
+**Agent policy: removed 2026-08-07.** This file used to set a standing split, Fable 5 for
+planning agents and Opus for execution agents. Claude Code 2.1.219+ suppresses subagents on
+Opus 5 unless they are asked for, so a standing policy no longer fires at all. Reading it
+would tell a session that dispatch is configured when it is not. Name the agent when you want
+one. The original wording is in `memory/feedback-fable5-only.md`.
 
 ## What this is
 Merged from two previously separate repos (`founder-crm-bot`, `founder-crm-landing`)
@@ -157,6 +159,10 @@ DASHBOARD_TOKEN_SECRET  # HMAC signing key for dashboard tokens
 ```
 
 ## Deployment
+**Both targets are on hosts estate.md retired on 2026-07-31.** Recorded here because it is where the
+code runs today, not because it is where it should run. Moving them is open work under "continue
+stack migration": a FastAPI service needs a server, so the bot goes to Vercel or the Oracle VM, and
+the static landing page goes to Cloudflare. Do not add new deployment work on either host.
 - `bot/` → Railway (`Procfile`, `railway.json`), FastAPI served via `uvicorn main:app`
 - `landing/` → GitHub Pages (https://argaur.github.io/siteline-crm/)
 
@@ -219,8 +225,10 @@ DASHBOARD_TOKEN_SECRET  # HMAC signing key for dashboard tokens
 
 ## Model notes
 **This section expires. Review it at every model launch and every Claude Code version bump.**
-Current as of 2026-08-05: Opus 5 / Sonnet 5 / Fable 5, Claude Code 2.1.222. Checked by
-`Claude Optimisation/scripts/claude-md-eval.sh`, which found nothing stale in this file.
+Current as of 2026-08-05: Opus 5 / Sonnet 5 / Fable 5, Claude Code 2.1.222.
+Re-checked 2026-08-07 by `Claude Optimisation/scripts/claude-md-eval.sh`. NOT clean: it reports the
+Railway deploy target, retired in estate.md, and this file being over the 200-line guidance.
+Both are real and both are open. Do not delete the finding; fix the cause.
 - Delegation is not automatic. Claude Code 2.1.219 and later suppress subagents on Opus 5 unless
   the user asks for one, so name the agent when you want it.
 - Do not add verification, anti-laziness or hedging instructions. These models self-verify, are
