@@ -26,9 +26,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Generate dashboard config.js (no secrets — public API URL + bot link only)
+        env:
+          API_BASE_URL: ${{ vars.API_BASE_URL }}
         run: |
-          cat > landing/dashboard/config.js <<'EOF'
-          const API_BASE_URL = 'https://founder-crm-bot-production.up.railway.app';
+          API_BASE_URL="${API_BASE_URL:-NOT_YET_DEPLOYED}"
+          cat > landing/dashboard/config.js <<EOF
+          const API_BASE_URL = '${API_BASE_URL}';
           const BOT_LINK     = 'https://t.me/SitelineCRMbot';
           const REFRESH_MS   = 5 * 60 * 1000;
           EOF

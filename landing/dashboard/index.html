@@ -1753,6 +1753,9 @@
   <script src="config.js"></script>
   <script>
     // BOT_LINK, REFRESH_MS and API_BASE_URL come from config.js (loaded above).
+    if (API_BASE_URL === 'NOT_YET_DEPLOYED') {
+      console.error('Dashboard API_BASE_URL is not configured — the bot has no live host yet (see repo CLAUDE.md). API calls will fail.');
+    }
     const _params     = new URLSearchParams(window.location.search);
     const _tokenParam = _params.get('token');
     const _uidParam   = _params.get('uid');

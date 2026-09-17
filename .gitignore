@@ -23,3 +23,6 @@ New Text Document.txt
 # Local agent scratch — must never be published to Pages (landing/ is served wholesale)
 .claude/
 landing/.claude/
+
+# stacksmith audit output — local tooling artifact, not source
+.stacksmith/
