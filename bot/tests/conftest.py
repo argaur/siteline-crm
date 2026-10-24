@@ -23,11 +23,13 @@ from tests.fakes import patched_bot  # noqa: E402,F401  (shared fixture)
 
 @pytest.fixture(autouse=True)
 def no_real_pool(monkeypatch):
-    """Any test that forgets to fake a db call fails loudly instead of dialling out."""
-    async def refuse(*args, **kwargs):
-        raise RuntimeError("test tried to open a real DB pool")
+    """init_pool becomes a no-op, so the pool is never opened. Any test that
+    forgets to fake a db call then fails loudly in db._get_pool() instead of
+    dialling out."""
+    async def no_op(*args, **kwargs):
+        return None
 
-    monkeypatch.setattr(db, "init_pool", refuse)
+    monkeypatch.setattr(db, "init_pool", no_op)
 
 
 @pytest.fixture

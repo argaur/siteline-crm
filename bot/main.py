@@ -280,6 +280,14 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def ensure_pool(request: Request, call_next):
+    """A serverless cold start may skip startup, so open the pool per request.
+    init_pool is idempotent, and min_size=0 means it opens no connection itself."""
+    await db.init_pool()
+    return await call_next(request)
+
+
 # ─── Request/Response schemas ──────────────────────────────────
 
 class RegisterRequest(BaseModel):
@@ -340,8 +348,6 @@ async def telegram_webhook(request: Request):
     if not isinstance(update_id, int) or isinstance(update_id, bool):
         raise HTTPException(status_code=400, detail="No integer update_id.")
 
-    # A cold serverless instance may not have run startup; init_pool is idempotent.
-    await db.init_pool()
     if not await db.claim_update(update_id):
         return {"ok": True, "duplicate": True}
 
