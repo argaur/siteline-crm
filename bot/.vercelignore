@@ -1,0 +1,6 @@
+.env
+.venv/
+deploy/
+eval/
+tests/
+__pycache__/

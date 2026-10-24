@@ -159,6 +159,11 @@ DASHBOARD_TOKEN_SECRET  # HMAC signing key for dashboard tokens
 ```
 
 ## Deployment
+**2026-10-24: the bot is moving to Vercel** (`siteline-api`, webhook mode). Code done and tested,
+Vercel project and cutover pending. See `bot/CLAUDE.md` Deployment and
+`docs/superpowers/plans/2026-10-24-vercel-rehost.md`. Railway is cancelled. The landing page now
+serves at `https://siteline.gauravg.dev`. The notes below predate the move.
+
 **Both targets are on hosts estate.md retired on 2026-07-31.** Recorded here because it is where the
 code runs today, not because it is where it should run. Moving them is open work under "continue
 stack migration": a FastAPI service needs a server, so the bot goes to Vercel or the Oracle VM, and

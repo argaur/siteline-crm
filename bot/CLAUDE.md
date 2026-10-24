@@ -135,18 +135,26 @@ TELEGRAM_BOT_TOKEN      # blank → bot starts in API-only mode (dashboard/API s
 BOT_NAME                # Telegram bot username without @ — used for deep links
 DATABASE_URL            # Neon pooled connection string
 OPENAI_API_KEY          # required for all AI: extraction/reasoning (gpt-4o-mini) + transcription (Whisper)
-APP_BASE_URL            # Railway URL — used in /start deep link and signup redirect
+APP_BASE_URL            # API base URL (https://siteline-api.gauravg.dev) — /start deep link and signup redirect
 DASHBOARD_TOKEN_SECRET  # HMAC signing key for dashboard tokens
+TELEGRAM_WEBHOOK_SECRET # must match the secret header Telegram sends; gopass founder-crm/bot/TELEGRAM_WEBHOOK_SECRET
 ```
 
 ## Deployment
-- Railway (`Procfile`, `railway.json`), FastAPI served via `uvicorn main:app`
+**Moving to Vercel (plan `docs/superpowers/plans/2026-10-24-vercel-rehost.md`).** Code is done and
+tested; the Vercel project and cutover (plan Tasks 7 and 8) are not yet run.
+- Target: Vercel project `siteline-api`, team `argaurs-projects`, root `bot/`, region `iad1`, Git
+  integration on `main`. Domain `https://siteline-api.gauravg.dev`. Never `vercel deploy` from the tree.
+- Telegram reaches the bot by webhook at `POST /telegram/webhook` (secret header
+  `X-Telegram-Bot-Api-Secret-Token`). Each update runs on a fresh PTB Application; conversation and
+  user_data state live in the Neon `ptb_state` table, delivery claims in `telegram_updates`.
+- The automatic nudge job is retired. `POST /api/leads/{id}/nudge` still works.
+- `python main.py` is local emergency mode (API plus polling). It refuses to start while a webhook is set.
+- Tests: `.venv/Scripts/python.exe -m pytest -q` from `bot/` (no network, no DB).
 - Landing + dashboard deploy separately to GitHub Pages — see `landing/CLAUDE.md`
 
-**Deploy target:** Railway project `founder-crm` (id `e244123a-3939-47be-a654-18c001ec949a`),
-service `founder-crm-bot` (id `a517b096-668c-4209-8ea6-a40d36d73ada`), workspace
-`Gaurav Gupta's Projects` (id `e7c14b80-ab32-4a76-9d10-b64df2d0c455`), Hobby plan, runtime Python via
-Nixpacks, deployed via `railway up` from `bot/`. Confirmed by Gaurav 2026-07-17.
+**Old target, retired:** Railway project `founder-crm`. The account was cancelled after the
+2026-10-21 breach and the bot has been down since. Delete the project only after cutover is verified.
 
 ## Status
 - **State:** Postgres/FastAPI migration complete, dashboard rework complete, all live-verified against
