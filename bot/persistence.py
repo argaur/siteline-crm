@@ -11,6 +11,7 @@ Values go through encode()/decode() so the types the handlers keep in user_data
 """
 
 import json
+import logging
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Dict, Optional
@@ -18,6 +19,8 @@ from typing import Any, Dict, Optional
 from telegram.ext import BasePersistence, PersistenceInput
 
 import db
+
+logger = logging.getLogger(__name__)
 
 _TAG = "__t"
 
@@ -33,7 +36,9 @@ def encode(obj: Any) -> Any:
     if isinstance(obj, tuple):
         return {_TAG: "tuple", "v": [encode(x) for x in obj]}
     if isinstance(obj, dict):
-        if all(isinstance(k, str) for k in obj):
+        # A plain dict that already holds _TAG takes the tagged form, so decode()
+        # can never mistake user data for a type tag.
+        if _TAG not in obj and all(isinstance(k, str) for k in obj):
             return {k: encode(v) for k, v in obj.items()}
         return {_TAG: "dict", "v": [[encode(k), encode(v)] for k, v in obj.items()]}
     if isinstance(obj, list):
@@ -65,6 +70,21 @@ def _conv_kind(name: str) -> str:
     return f"conv:{name}"
 
 
+def _decode_rows(kind: str, rows: Dict[str, Any], parse_key) -> Dict[Any, Any]:
+    """Decode every row, skipping and logging any that fail.
+
+    PTB loads all state at Application.initialize, so one bad row raising here
+    would fail every webhook request until someone fixed the table by hand.
+    """
+    out = {}
+    for k, v in rows.items():
+        try:
+            out[parse_key(k)] = decode(v)
+        except (ValueError, TypeError, KeyError, ArithmeticError) as exc:
+            logger.error("ptb_state: skipped bad row kind=%s key=%r: %s", kind, k, exc)
+    return out
+
+
 class NeonPersistence(BasePersistence):
     """Writes through to the store on every update_* call; reads on get_*."""
 
@@ -76,22 +96,23 @@ class NeonPersistence(BasePersistence):
 
     async def get_user_data(self) -> Dict[int, Any]:
         rows = await self._store.ptb_state_load("user_data")
-        return {int(k): decode(v) for k, v in rows.items()}
+        return _decode_rows("user_data", rows, int)
 
     async def get_chat_data(self) -> Dict[int, Any]:
         rows = await self._store.ptb_state_load("chat_data")
-        return {int(k): decode(v) for k, v in rows.items()}
+        return _decode_rows("chat_data", rows, int)
 
     async def get_bot_data(self) -> Dict[Any, Any]:
         rows = await self._store.ptb_state_load("bot_data")
-        return decode(rows["bot_data"]) if "bot_data" in rows else {}
+        return _decode_rows("bot_data", rows, str).get("bot_data", {})
 
     async def get_callback_data(self) -> Optional[Any]:
         return None
 
     async def get_conversations(self, name: str) -> Dict[tuple, object]:
-        rows = await self._store.ptb_state_load(_conv_kind(name))
-        return {tuple(json.loads(k)): decode(v) for k, v in rows.items()}
+        kind = _conv_kind(name)
+        rows = await self._store.ptb_state_load(kind)
+        return _decode_rows(kind, rows, lambda k: tuple(json.loads(k)))
 
     # ── writes ──
 

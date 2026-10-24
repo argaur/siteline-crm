@@ -41,6 +41,24 @@ async def test_encode_round_trips_rich_types():
     assert decode(stored) == original
 
 
+async def test_dict_holding_the_tag_key_round_trips_as_data():
+    # A user-typed value must never be read back as a type tag.
+    original = {"__t": "datetime", "v": "not-a-date"}
+    stored = json.loads(json.dumps(encode(original)))
+    assert decode(stored) == original
+
+
+async def test_corrupt_row_is_skipped_not_fatal(caplog):
+    # One bad row must not stop every other user's state from loading.
+    store = FakeStore()
+    store.rows["user_data"] = {
+        "1": {"__t": "datetime", "v": "garbage"},
+        "2": {"k": 1},
+    }
+    assert await NeonPersistence(store=store).get_user_data() == {2: {"k": 1}}
+    assert "user_data" in caplog.text
+
+
 async def test_drop_user_data_removes_row():
     store = FakeStore()
     first = NeonPersistence(store=store)
