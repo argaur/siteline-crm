@@ -25,13 +25,22 @@ import uvicorn
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CallbackQueryHandler, ContextTypes
+from telegram.ext import (
+    Application,
+    ApplicationBuilder,
+    BasePersistence,
+    CallbackQueryHandler,
+    ContextTypes,
+)
 
 import db
 import commands
 import flows
+import webhook
+from persistence import NeonPersistence
 
 load_dotenv()
 
@@ -44,6 +53,7 @@ logger = logging.getLogger(__name__)
 # ─── Config ───────────────────────────────────────────────────
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
 APP_BASE_URL = os.getenv("APP_BASE_URL", "")
 BOT_NAME = os.getenv("BOT_NAME", "")  # e.g. "SitelineCRMbot" (without @)
 
@@ -266,9 +276,16 @@ async def nudge_callback(update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 # ─── Build the Telegram application ───────────────────────────
 
-def _build_application():
-    """Creates the PTB Application, registers all handlers, schedules the nudge job."""
-    telegram_app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+def build_application(persistence: BasePersistence) -> Application:
+    """Creates the PTB Application and registers all handlers. No job queue:
+    the webhook builds one of these per update, so nothing could run between."""
+    telegram_app = (
+        ApplicationBuilder()
+        .token(TELEGRAM_BOT_TOKEN)
+        .persistence(persistence)
+        .job_queue(None)
+        .build()
+    )
 
     # Register command + callback handlers from commands.py first
     for handler in commands.get_handlers():
@@ -284,21 +301,12 @@ def _build_application():
         CallbackQueryHandler(nudge_callback, pattern="^nudge_(ack|snooze|lost):")
     )
 
-    telegram_app.job_queue.run_repeating(
-        nudge_job,
-        interval=NUDGE_INTERVAL_SECONDS,
-        first=NUDGE_FIRST_DELAY_SECONDS,
-        name="stale_lead_nudges",
-    )
-
-    logger.info(
-        f"All handlers registered; nudge job every {NUDGE_INTERVAL_SECONDS}s "
-        f"(first run in {NUDGE_FIRST_DELAY_SECONDS}s, stale threshold {NUDGE_STALE_DAYS}d)."
-    )
     return telegram_app
 
 
-telegram_app = _build_application() if TELEGRAM_BOT_TOKEN else None
+# Local polling only (python main.py). Building does not touch the network or DB;
+# initialize() in the lifespan does.
+telegram_app = build_application(NeonPersistence()) if TELEGRAM_BOT_TOKEN else None
 if telegram_app is None:
     logger.warning("TELEGRAM_BOT_TOKEN is not set — starting in API-only mode (no bot, no nudges).")
 
@@ -400,6 +408,39 @@ async def health():
         logger.exception("Health check: DB unreachable")
         db_status = "unavailable"
     return {"status": "ok", "db": db_status}
+
+
+@app.post("/telegram/webhook")
+async def telegram_webhook(request: Request):
+    """Telegram delivers each update here. Delivery is at-least-once: a failed
+    update's claim is released and a 500 tells Telegram to retry it."""
+    given = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+    if not TELEGRAM_WEBHOOK_SECRET or not secrets.compare_digest(given, TELEGRAM_WEBHOOK_SECRET):
+        raise HTTPException(status_code=403, detail="Bad webhook secret.")
+
+    # 400, not 500, for a body we can never parse, so Telegram stops retrying it.
+    try:
+        payload = await request.json()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Body is not JSON.")
+    update_id = payload.get("update_id") if isinstance(payload, dict) else None
+    if not isinstance(update_id, int) or isinstance(update_id, bool):
+        raise HTTPException(status_code=400, detail="No integer update_id.")
+
+    # A cold serverless instance may not have run startup; init_pool is idempotent.
+    await db.init_pool()
+    if not await db.claim_update(update_id):
+        return {"ok": True, "duplicate": True}
+
+    try:
+        await webhook.handle_update(payload)
+    except Exception:
+        logger.exception(f"[webhook] update {update_id} failed; releasing for retry")
+        await db.release_update(update_id)
+        return JSONResponse(status_code=500, content={"ok": False})
+
+    await db.finish_update(update_id)
+    return {"ok": True}
 
 
 @app.post("/register", response_model=RegisterResponse)

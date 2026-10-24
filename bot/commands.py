@@ -749,7 +749,7 @@ def get_handlers() -> list:
         },
         fallbacks=[CommandHandler("cancel", cancel)],
         name="addcontact",
-        persistent=False,
+        persistent=True,
     )
 
     return [
