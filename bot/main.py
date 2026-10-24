@@ -347,6 +347,7 @@ app = FastAPI(title="Stylework B2B Sales CRM API", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
+        "https://siteline.gauravg.dev",
         "https://argaur.github.io",
         "http://localhost",
         "http://127.0.0.1",
