@@ -320,7 +320,7 @@ class NoteRequest(BaseModel):
 
 @app.get("/health")
 async def health():
-    """Health check — Railway pings this to confirm the service is alive."""
+    """Health check: confirms the API is up and can reach the database."""
     try:
         pool = await db.init_pool()
         await pool.fetchval("SELECT 1")
