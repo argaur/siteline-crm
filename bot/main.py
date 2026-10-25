@@ -266,12 +266,11 @@ async def lifespan(fastapi_app: FastAPI):
 
 app = FastAPI(title="Stylework B2B Sales CRM API", lifespan=lifespan)
 
-# Allow cross-origin requests from GitHub Pages (dashboard + landing page)
+# Allow cross-origin requests from the landing page and dashboard (Cloudflare Pages)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "https://siteline.gauravg.dev",
-        "https://argaur.github.io",
         "http://localhost",
         "http://127.0.0.1",
         "http://localhost:8080",

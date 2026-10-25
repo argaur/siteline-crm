@@ -8,8 +8,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # No build step — pure static HTML/CSS/JS, no framework, no bundler
 python -m http.server 8080    # then open http://localhost:8080
 
-# Deploy: push to GitHub — auto-deploys to GitHub Pages
-# Live URL: https://argaur.github.io/siteline-crm/
+# Deploy: merge to main — .github/workflows/pages.yml deploys to Cloudflare Pages (project siteline)
+# Live URL: https://siteline.gauravg.dev (old argaur.github.io/siteline-crm/* links 301 here)
 ```
 
 ## Architecture
@@ -68,8 +68,8 @@ behavior is preserved, only the token handling around it changed.
 ## API Dependency
 
 The dashboard fetches all data from `bot/main.py`'s FastAPI backend (`API_BASE_URL` in `config.js` —
-Railway URL in production, `http://localhost:8000` for local dev). CORS on the backend only allows
-`https://argaur.github.io` and `localhost`/`127.0.0.1` (with or without `:8080`) — serve this directory
+`https://siteline-api.gauravg.dev` in production, `http://localhost:8000` for local dev). CORS on the
+backend only allows `https://siteline.gauravg.dev` and `localhost`/`127.0.0.1` (with or without `:8080`) — serve this directory
 on one of those origins when testing locally, or every fetch will fail with a CORS error, not a useful
 one. If the backend is sleeping or down, `apiFetch` throws and the calling page shows `.err-banner`
 rather than a blank/broken view.
