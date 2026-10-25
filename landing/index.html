@@ -1315,7 +1315,7 @@
 
 <!-- ── SCRIPTS ───────────────────────────────────────────── -->
 <script>
-  const RAILWAY_URL = "https://founder-crm-bot-production.up.railway.app";
+  const API_URL = "https://siteline-api.gauravg.dev";
 
   function openModal() {
     document.getElementById('signup-modal').classList.add('open');
@@ -1362,7 +1362,7 @@
     spinner.style.display = 'block';
 
     try {
-      const res = await fetch(`${RAILWAY_URL}/register`, {
+      const res = await fetch(`${API_URL}/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ first_name: firstName, email, company })
