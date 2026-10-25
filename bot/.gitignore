@@ -18,3 +18,7 @@ New Text Document.txt
 # Editor
 .vscode/
 .idea/
+
+.vercel
+.env*
+!.env.example

@@ -774,7 +774,7 @@ def get_addnote_conversation() -> ConversationHandler:
         },
         fallbacks=[CommandHandler("cancel", cancel)],
         name="addnote",
-        persistent=False,
+        persistent=True,
     )
 
 

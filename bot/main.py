@@ -1,19 +1,16 @@
 """
 main.py — Entry point for the Stylework B2B Sales CRM.
 
-Runs two services in the same asyncio event loop:
-  1. Telegram bot (python-telegram-bot v21, polling mode) + JobQueue nudges
-  2. FastAPI web server (uvicorn) — dashboard API + landing signup
+One FastAPI app serves the dashboard API, the landing signup and the Telegram
+webhook (POST /telegram/webhook, see webhook.py). Each update runs on a fresh
+python-telegram-bot Application whose state lives in Neon (persistence.py).
 
 Usage:
-  python main.py          # local development
-  uvicorn main:app ...    # Railway uses the FastAPI app object directly
-
-Railway Procfile:
-  web: uvicorn main:app --host 0.0.0.0 --port $PORT
-  (Note: when Railway runs uvicorn main:app, the lifespan handler starts the bot.)
+  vercel (production)     # Vercel serves `app` directly; root directory bot/
+  python main.py          # local emergency mode: API + polling, refuses while a webhook is set
 """
 
+import asyncio
 import logging
 import os
 import secrets
@@ -25,13 +22,22 @@ import uvicorn
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CallbackQueryHandler, ContextTypes
+from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    Application,
+    ApplicationBuilder,
+    BasePersistence,
+    CallbackQueryHandler,
+    ContextTypes,
+)
 
 import db
 import commands
 import flows
+import webhook
+from persistence import NeonPersistence
 
 load_dotenv()
 
@@ -44,18 +50,13 @@ logger = logging.getLogger(__name__)
 # ─── Config ───────────────────────────────────────────────────
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
 APP_BASE_URL = os.getenv("APP_BASE_URL", "")
 BOT_NAME = os.getenv("BOT_NAME", "")  # e.g. "SitelineCRMbot" (without @)
 
-# Nudge job tuning. For a live demo test, shrink via env before starting:
-#   NUDGE_INTERVAL_SECONDS=30 NUDGE_FIRST_DELAY_SECONDS=5 NUDGE_RENOTIFY_HOURS=0
-# and (optionally) NUDGE_STALE_DAYS=0 so freshly-seeded leads count as stale.
-NUDGE_INTERVAL_SECONDS = int(os.getenv("NUDGE_INTERVAL_SECONDS", str(4 * 3600)))
-NUDGE_FIRST_DELAY_SECONDS = int(os.getenv("NUDGE_FIRST_DELAY_SECONDS", "90"))
+# Days without activity before a lead counts as stalled (dashboard views and snooze).
+# The automatic nudge job was retired with the move to webhooks; managers nudge by hand.
 NUDGE_STALE_DAYS = int(os.getenv("NUDGE_STALE_DAYS", "3"))
-# In-memory re-notify guard so a 4h interval doesn't DM the same stale lead
-# six times a day. Resets on restart; set to 0 when testing.
-NUDGE_RENOTIFY_HOURS = float(os.getenv("NUDGE_RENOTIFY_HOURS", "24"))
 
 # Demo mode (off by default — set DEMO_MODE=true only on the presentation deploy).
 # A rep who owns no leads reads the platform-wide pipeline instead of an empty one,
@@ -180,50 +181,6 @@ async def _send_nudge(bot, lead: Dict[str, Any], rep: Dict[str, Any],
     )
 
 
-async def nudge_job(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Periodic team-wide scan: DM the assigned rep about every stale lead."""
-    try:
-        stale = await db.get_stale_leads(days=NUDGE_STALE_DAYS)
-    except Exception:
-        logger.exception("[nudge] stale-lead query failed; skipping this run")
-        return
-    if not stale:
-        return
-
-    company_names = await _company_names(stale)
-    reps: Dict[int, Optional[Dict[str, Any]]] = {}
-    nudged_at: Dict[int, datetime] = context.application.bot_data.setdefault("nudged_at", {})
-    now = datetime.now(timezone.utc)
-    sent = skipped = 0
-
-    for lead in stale:
-        try:
-            rep_id = lead.get("assigned_to")
-            if not rep_id:
-                skipped += 1
-                continue
-            if rep_id not in reps:
-                reps[rep_id] = await db.get_user_by_id(rep_id)
-            rep = reps[rep_id]
-            if not rep or not rep.get("telegram_id"):
-                logger.warning(f"[nudge] lead {lead['id']}: rep {rep_id} unresolvable, skipping")
-                skipped += 1
-                continue
-
-            last = nudged_at.get(lead["id"])
-            if last and (now - last).total_seconds() < NUDGE_RENOTIFY_HOURS * 3600:
-                skipped += 1
-                continue
-
-            await _send_nudge(context.bot, lead, rep, company_names.get(lead.get("company_id")))
-            nudged_at[lead["id"]] = now
-            sent += 1
-        except Exception:
-            logger.exception(f"[nudge] failed for lead {lead.get('id')}; continuing")
-
-    logger.info(f"[nudge] run complete: {len(stale)} stale, {sent} sent, {skipped} skipped")
-
-
 async def nudge_callback(update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles Keep chasing / Snooze / Mark Lost taps on nudge DMs."""
     query = update.callback_query
@@ -249,7 +206,6 @@ async def nudge_callback(update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 ai_summary=f"Nudge snoozed — follow-up timer reset for {NUDGE_STALE_DAYS} days.",
                 user_id=user["id"] if user else None,
             )
-            context.application.bot_data.setdefault("nudged_at", {}).pop(lead_id, None)
             await query.answer(f"Snoozed {NUDGE_STALE_DAYS} days.")
             await query.edit_message_text(f"{base_text}\n💤 Snoozed — I'll check back in {NUDGE_STALE_DAYS} days.")
 
@@ -266,9 +222,16 @@ async def nudge_callback(update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 # ─── Build the Telegram application ───────────────────────────
 
-def _build_application():
-    """Creates the PTB Application, registers all handlers, schedules the nudge job."""
-    telegram_app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+def build_application(persistence: BasePersistence) -> Application:
+    """Creates the PTB Application and registers all handlers. No job queue:
+    the webhook builds one of these per update, so nothing could run between."""
+    telegram_app = (
+        ApplicationBuilder()
+        .token(TELEGRAM_BOT_TOKEN)
+        .persistence(persistence)
+        .job_queue(None)
+        .build()
+    )
 
     # Register command + callback handlers from commands.py first
     for handler in commands.get_handlers():
@@ -284,59 +247,17 @@ def _build_application():
         CallbackQueryHandler(nudge_callback, pattern="^nudge_(ack|snooze|lost):")
     )
 
-    telegram_app.job_queue.run_repeating(
-        nudge_job,
-        interval=NUDGE_INTERVAL_SECONDS,
-        first=NUDGE_FIRST_DELAY_SECONDS,
-        name="stale_lead_nudges",
-    )
-
-    logger.info(
-        f"All handlers registered; nudge job every {NUDGE_INTERVAL_SECONDS}s "
-        f"(first run in {NUDGE_FIRST_DELAY_SECONDS}s, stale threshold {NUDGE_STALE_DAYS}d)."
-    )
     return telegram_app
-
-
-telegram_app = _build_application() if TELEGRAM_BOT_TOKEN else None
-if telegram_app is None:
-    logger.warning("TELEGRAM_BOT_TOKEN is not set — starting in API-only mode (no bot, no nudges).")
 
 
 # ─── FastAPI lifespan ─────────────────────────────────────────
 
 @asynccontextmanager
 async def lifespan(fastapi_app: FastAPI):
-    """
-    Startup: DB pool first (the API is useless without it), then bot polling.
-    A bad/missing Telegram token must not take the HTTP layer down with it,
-    so bot startup failures are logged and swallowed.
-    """
-    logger.info("Starting Stylework CRM...")
-    await db.init_pool()
-    logger.info("DB pool ready.")
-
-    bot_started = False
-    if telegram_app is not None:
-        try:
-            await telegram_app.initialize()
-            await telegram_app.start()
-            await telegram_app.updater.start_polling(drop_pending_updates=True)
-            bot_started = True
-            logger.info("Telegram bot is polling.")
-        except Exception:
-            logger.exception("Telegram bot failed to start — continuing in API-only mode.")
-
-    yield  # FastAPI serves requests here
-
-    logger.info("Shutting down...")
-    if bot_started:
-        await telegram_app.updater.stop()
-        await telegram_app.stop()
-        await telegram_app.shutdown()
-        logger.info("Bot stopped.")
+    """Nothing to start: the pool opens lazily (init_pool is idempotent) and the
+    bot is driven by the webhook. Shutdown closes the pool if one was opened."""
+    yield
     await db.close_pool()
-    logger.info("DB pool closed.")
 
 
 # ─── FastAPI app ───────────────────────────────────────────────
@@ -347,6 +268,7 @@ app = FastAPI(title="Stylework B2B Sales CRM API", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
+        "https://siteline.gauravg.dev",
         "https://argaur.github.io",
         "http://localhost",
         "http://127.0.0.1",
@@ -356,6 +278,14 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PATCH"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def ensure_pool(request: Request, call_next):
+    """A serverless cold start may skip startup, so open the pool per request.
+    init_pool is idempotent, and min_size=0 means it opens no connection itself."""
+    await db.init_pool()
+    return await call_next(request)
 
 
 # ─── Request/Response schemas ──────────────────────────────────
@@ -390,7 +320,7 @@ class NoteRequest(BaseModel):
 
 @app.get("/health")
 async def health():
-    """Health check — Railway pings this to confirm the service is alive."""
+    """Health check: confirms the API is up and can reach the database."""
     try:
         pool = await db.init_pool()
         await pool.fetchval("SELECT 1")
@@ -399,6 +329,37 @@ async def health():
         logger.exception("Health check: DB unreachable")
         db_status = "unavailable"
     return {"status": "ok", "db": db_status}
+
+
+@app.post("/telegram/webhook")
+async def telegram_webhook(request: Request):
+    """Telegram delivers each update here. Delivery is at-least-once: a failed
+    update's claim is released and a 500 tells Telegram to retry it."""
+    given = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+    if not TELEGRAM_WEBHOOK_SECRET or not secrets.compare_digest(given, TELEGRAM_WEBHOOK_SECRET):
+        raise HTTPException(status_code=403, detail="Bad webhook secret.")
+
+    # 400, not 500, for a body we can never parse, so Telegram stops retrying it.
+    try:
+        payload = await request.json()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Body is not JSON.")
+    update_id = payload.get("update_id") if isinstance(payload, dict) else None
+    if not isinstance(update_id, int) or isinstance(update_id, bool):
+        raise HTTPException(status_code=400, detail="No integer update_id.")
+
+    if not await db.claim_update(update_id):
+        return {"ok": True, "duplicate": True}
+
+    try:
+        await webhook.handle_update(payload)
+    except Exception:
+        logger.exception(f"[webhook] update {update_id} failed; releasing for retry")
+        await db.release_update(update_id)
+        return JSONResponse(status_code=500, content={"ok": False})
+
+    await db.finish_update(update_id)
+    return {"ok": True}
 
 
 @app.post("/register", response_model=RegisterResponse)
@@ -870,12 +831,13 @@ async def api_manual_nudge(
     rep = await db.get_user_by_id(lead["assigned_to"])
     if rep is None or not rep.get("telegram_id") or rep["telegram_id"] < 0:
         raise HTTPException(status_code=409, detail="Assigned rep has no linked Telegram account.")
-    if telegram_app is None or not telegram_app.running:
-        raise HTTPException(status_code=503, detail="Telegram bot is not running.")
+    if not TELEGRAM_BOT_TOKEN:
+        raise HTTPException(status_code=503, detail="Telegram bot token is not configured.")
 
     company_names = await _company_names([lead])
     try:
-        await _send_nudge(telegram_app.bot, lead, rep, company_names.get(lead.get("company_id")))
+        async with Bot(TELEGRAM_BOT_TOKEN) as bot:
+            await _send_nudge(bot, lead, rep, company_names.get(lead.get("company_id")))
     except Exception as e:
         logger.exception(f"[nudge] manual nudge failed for lead {lead_id}")
         raise HTTPException(status_code=502, detail=f"Telegram send failed: {e}")
@@ -884,6 +846,38 @@ async def api_manual_nudge(
 
 # ─── Local dev entry point ─────────────────────────────────────
 
-if __name__ == "__main__":
+async def _run_local() -> None:
+    """Local emergency mode: API plus polling in one loop. Polling and a webhook
+    cannot both be live, and silently deleting the webhook would take production
+    down, so this refuses to start while one is set."""
     port = int(os.getenv("PORT", 8000))
-    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
+    server = uvicorn.Server(uvicorn.Config(app, host="0.0.0.0", port=port))
+    if not TELEGRAM_BOT_TOKEN:
+        logger.warning("TELEGRAM_BOT_TOKEN is not set; serving the API only.")
+        await server.serve()
+        return
+
+    await db.init_pool()
+    telegram_app = build_application(NeonPersistence())
+    await telegram_app.initialize()
+    try:
+        info = await telegram_app.bot.get_webhook_info()
+        if info.url:
+            logger.warning(
+                f"A webhook is set ({info.url}). Polling would conflict with it. "
+                "Remove it on purpose with deleteWebhook first. Exiting."
+            )
+            return
+        await telegram_app.start()
+        await telegram_app.updater.start_polling(drop_pending_updates=True)
+        logger.info("Telegram bot is polling.")
+        await server.serve()
+        await telegram_app.updater.stop()
+        await telegram_app.stop()
+    finally:
+        await telegram_app.shutdown()
+        await db.close_pool()
+
+
+if __name__ == "__main__":
+    asyncio.run(_run_local())
