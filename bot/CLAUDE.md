@@ -158,7 +158,7 @@ TELEGRAM_WEBHOOK_SECRET # must match the secret header Telegram sends; gopass fo
 - Live-verified 2026-10-25: `/health` db ok, CORS for `siteline.gauravg.dev`, 403 without the secret,
   `/start`, full `/addcontact` across function calls, text capture. Not live-tested: AI extraction card,
   inline-button callbacks, voice, image.
-- Landing + dashboard deploy separately to GitHub Pages — see `landing/CLAUDE.md`
+- Landing + dashboard deploy separately to Cloudflare Pages — see `landing/CLAUDE.md`
 
 **Old target, retired:** Railway project `founder-crm`, account cancelled after the 2026-10-21 breach.
 
