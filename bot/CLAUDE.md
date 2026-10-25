@@ -7,11 +7,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 # Local dev
 pip install -r requirements.txt
-python main.py                          # starts bot (polling, if TELEGRAM_BOT_TOKEN set) + FastAPI on port 8000
-                                          # if TELEGRAM_BOT_TOKEN is blank, starts in API-only mode (no bot, no nudges)
+python main.py                          # local emergency mode: polling + FastAPI on port 8000
+                                          # refuses to poll while a webhook is set; blank token = API-only
 
-# Railway (production)
-uvicorn main:app --host 0.0.0.0 --port $PORT   # Railway Procfile command
+# Tests (no network, no DB)
+.venv/Scripts/python.exe -m pytest -q
+
+# Production: Vercel Git integration on main. Never `vercel deploy` from the tree.
 
 # Apply schema + seed spaces inventory (once, against a fresh DATABASE_URL)
 python scripts/apply_schema.py
@@ -141,20 +143,24 @@ TELEGRAM_WEBHOOK_SECRET # must match the secret header Telegram sends; gopass fo
 ```
 
 ## Deployment
-**Moving to Vercel (plan `docs/superpowers/plans/2026-10-24-vercel-rehost.md`).** Code is done and
-tested; the Vercel project and cutover (plan Tasks 7 and 8) are not yet run.
-- Target: Vercel project `siteline-api`, team `argaurs-projects`, root `bot/`, region `iad1`, Git
-  integration on `main`. Domain `https://siteline-api.gauravg.dev`. Never `vercel deploy` from the tree.
+**Live on Vercel since 2026-10-25** (plan `docs/superpowers/plans/2026-10-24-vercel-rehost.md`).
+- Vercel project `siteline-api` (`prj_1aOwM50fSAm5Tz0daBKLhUnJUPzP`), team `argaurs-projects`, root
+  `bot/`, region `iad1`, 60 s timeout, Git integration on `main`. Builds skip when `bot/` is unchanged.
+  Domain `https://siteline-api.gauravg.dev`. Never `vercel deploy` from the tree.
+- Env vars (Production and Preview) come from gopass `founder-crm/bot/*` by pipe, plus `DEMO_MODE=true`.
 - Telegram reaches the bot by webhook at `POST /telegram/webhook` (secret header
-  `X-Telegram-Bot-Api-Secret-Token`). Each update runs on a fresh PTB Application; conversation and
-  user_data state live in the Neon `ptb_state` table, delivery claims in `telegram_updates`.
+  `X-Telegram-Bot-Api-Secret-Token`, `allowed_updates` = message, callback_query). Each update runs on a
+  fresh PTB Application; conversation and user_data state live in Neon `ptb_state`, delivery claims in
+  `telegram_updates` (migration `migrations/2026-10-24-webhook-state.sql`, applied and verified 2026-10-25).
+- Re-run `setWebhook` (url, secret_token, allowed_updates) after any bot token rotation.
+- `httpx` logs at WARNING only: at INFO it logged Telegram URLs, which carry the bot token (fixed 2026-10-25).
 - The automatic nudge job is retired. `POST /api/leads/{id}/nudge` still works.
-- `python main.py` is local emergency mode (API plus polling). It refuses to start while a webhook is set.
-- Tests: `.venv/Scripts/python.exe -m pytest -q` from `bot/` (no network, no DB).
+- Live-verified 2026-10-25: `/health` db ok, CORS for `siteline.gauravg.dev`, 403 without the secret,
+  `/start`, full `/addcontact` across function calls, text capture. Not live-tested: AI extraction card,
+  inline-button callbacks, voice, image.
 - Landing + dashboard deploy separately to GitHub Pages — see `landing/CLAUDE.md`
 
-**Old target, retired:** Railway project `founder-crm`. The account was cancelled after the
-2026-10-21 breach and the bot has been down since. Delete the project only after cutover is verified.
+**Old target, retired:** Railway project `founder-crm`, account cancelled after the 2026-10-21 breach.
 
 ## Status
 - **State:** Postgres/FastAPI migration complete, dashboard rework complete, all live-verified against
