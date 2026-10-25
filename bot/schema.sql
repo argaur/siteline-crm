@@ -77,3 +77,18 @@ CREATE INDEX idx_leads_assigned_to ON leads(assigned_to);
 CREATE INDEX idx_leads_stage ON leads(stage);
 CREATE INDEX idx_leads_last_activity_at ON leads(last_activity_at);
 CREATE INDEX idx_interactions_lead_id ON interactions(lead_id);
+
+-- Webhook delivery claims and PTB conversation state (migrations/2026-10-24-webhook-state.sql).
+CREATE TABLE telegram_updates (
+    update_id   bigint PRIMARY KEY,
+    status      text NOT NULL CHECK (status IN ('processing', 'done')),
+    received_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE ptb_state (
+    kind       text NOT NULL,
+    key        text NOT NULL,
+    data       jsonb NOT NULL,
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (kind, key)
+);

@@ -42,7 +42,11 @@ async def init_pool() -> asyncpg.Pool:
             raise RuntimeError("DATABASE_URL is not set")
         # statement_cache_size=0: Neon's pooled endpoint fronts PgBouncer in
         # transaction mode, where server-side prepared statements break.
-        _pool = await asyncpg.create_pool(dsn, statement_cache_size=0)
+        # Small pool: on Vercel each warm instance holds its own, and Neon's
+        # pooler does the real fan-in.
+        _pool = await asyncpg.create_pool(
+            dsn, statement_cache_size=0, min_size=0, max_size=2
+        )
     return _pool
 
 
@@ -52,6 +56,66 @@ async def close_pool() -> None:
     if _pool is not None:
         await _pool.close()
         _pool = None
+
+
+# ─── Telegram webhook delivery claims ─────────────────────────
+# At-least-once: a failed update's row is deleted so Telegram's retry runs it
+# again; a row stuck in 'processing' for 2+ minutes (function killed mid-run)
+# is taken over by the next retry.
+
+async def claim_update(update_id: int) -> bool:
+    """True when this caller should process the update."""
+    pool = _get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "DELETE FROM telegram_updates WHERE received_at < now() - interval '7 days'"
+        )
+        claimed = await conn.fetchval(
+            """
+            INSERT INTO telegram_updates (update_id, status, received_at)
+            VALUES ($1, 'processing', now())
+            ON CONFLICT (update_id) DO UPDATE
+                SET received_at = now()
+                WHERE telegram_updates.status = 'processing'
+                  AND telegram_updates.received_at < now() - interval '2 minutes'
+            RETURNING update_id
+            """,
+            update_id,
+        )
+    return claimed is not None
+
+
+async def finish_update(update_id: int) -> None:
+    await _get_pool().execute(
+        "UPDATE telegram_updates SET status = 'done' WHERE update_id = $1", update_id
+    )
+
+
+async def release_update(update_id: int) -> None:
+    await _get_pool().execute("DELETE FROM telegram_updates WHERE update_id = $1", update_id)
+
+
+# ─── PTB persistence store (see persistence.py) ───────────────
+
+async def ptb_state_load(kind: str) -> Dict[str, Any]:
+    rows = await _get_pool().fetch("SELECT key, data FROM ptb_state WHERE kind = $1", kind)
+    return {r["key"]: json.loads(r["data"]) for r in rows}
+
+
+async def ptb_state_save(kind: str, key: str, data: Any) -> None:
+    await _get_pool().execute(
+        """
+        INSERT INTO ptb_state (kind, key, data, updated_at) VALUES ($1, $2, $3::jsonb, now())
+        ON CONFLICT (kind, key) DO UPDATE SET data = EXCLUDED.data, updated_at = now()
+        """,
+        kind,
+        key,
+        json.dumps(data),
+    )
+
+
+async def ptb_state_delete(kind: str, key: str) -> None:
+    await _get_pool().execute("DELETE FROM ptb_state WHERE kind = $1 AND key = $2", kind, key)
 
 
 def _get_pool() -> asyncpg.Pool:
