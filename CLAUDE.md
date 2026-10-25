@@ -25,7 +25,7 @@ before starting any build work.
 ## Layout
 ```
 bot/       — Telegram bot backend (Python/FastAPI), deploys to Vercel (siteline-api, webhook mode)
-landing/   — Landing page + dashboard (static HTML/JS), deploys to GitHub Pages
+landing/   — Landing page + dashboard (static HTML/JS), deploys to Cloudflare Pages
 ```
 
 ## Commands
