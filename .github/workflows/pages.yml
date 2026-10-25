@@ -1,4 +1,7 @@
-name: Deploy landing/ to GitHub Pages
+name: Deploy landing/ to Cloudflare Pages
+
+# GitHub Pages is retired for this site (estate.md). The GitHub Pages site stays configured with
+# the custom domain only so argaur.github.io/siteline-crm/* keeps its 301 to siteline.gauravg.dev.
 
 on:
   push:
@@ -10,8 +13,6 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: pages
@@ -20,23 +21,25 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
       - name: Generate dashboard config.js (no secrets — public API URL + bot link only)
         env:
           API_BASE_URL: ${{ vars.API_BASE_URL }}
         run: |
-          API_BASE_URL="${API_BASE_URL:-NOT_YET_DEPLOYED}"
+          if [ -z "$API_BASE_URL" ]; then
+            echo "::error::repo variable API_BASE_URL is not set"
+            exit 1
+          fi
           cat > landing/dashboard/config.js <<EOF
           const API_BASE_URL = '${API_BASE_URL}';
           const BOT_LINK     = 'https://t.me/SitelineCRMbot';
           const REFRESH_MS   = 5 * 60 * 1000;
           EOF
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: landing
-      - id: deployment
-        uses: actions/deploy-pages@v4
+      - name: Drop repo-only files from the upload
+        run: rm -f landing/CLAUDE.md landing/CNAME
+      - name: Deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx --yes wrangler@3.114.17 pages deploy landing --project-name siteline --branch main
