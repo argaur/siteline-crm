@@ -1,4 +1,13 @@
+import logging
+
 import commands
+import main
+
+
+def test_httpx_request_lines_are_not_logged():
+    # httpx logs each request URL at INFO, and Telegram URLs carry the bot token.
+    assert main is not None
+    assert not logging.getLogger("httpx").isEnabledFor(logging.INFO)
 
 
 def test_cors_preflight_allows_siteline_origin(client):
